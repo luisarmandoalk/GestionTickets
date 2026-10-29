@@ -1,0 +1,197 @@
+{
+  "info": {
+    "name": "Gestión de Tickets con IA",
+    "description": "Solicitudes de ejemplo de la API. Ejecute primero 'Crear ticket': guarda el id creado en la variable ticketId.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080" },
+    { "key": "ticketId", "value": "1" }
+  ],
+  "item": [
+    {
+      "name": "Tickets",
+      "item": [
+        {
+          "name": "Crear ticket",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 201', () => pm.response.to.have.status(201));",
+                  "if (pm.response.code === 201) { pm.collectionVariables.set('ticketId', pm.response.json().id); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"titulo\": \"Problema con internet\",\n  \"descripcion\": \"Desde esta mañana no puedo conectarme a internet y tengo una reunión importante en 20 minutos.\",\n  \"usuarioId\": 1\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/tickets", "host": ["{{baseUrl}}"], "path": ["api", "tickets"] }
+          }
+        },
+        {
+          "name": "Consultar tickets con filtros",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/tickets?estado=ABIERTO&prioridad=ALTA&page=0&size=20&sort=fechaCreacion,desc",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "tickets"],
+              "query": [
+                { "key": "estado", "value": "ABIERTO" },
+                { "key": "prioridad", "value": "ALTA" },
+                { "key": "categoria", "value": "CONECTIVIDAD", "disabled": true },
+                { "key": "usuarioId", "value": "1", "disabled": true },
+                { "key": "tecnicoId", "value": "5", "disabled": true },
+                { "key": "texto", "value": "internet", "disabled": true },
+                { "key": "page", "value": "0" },
+                { "key": "size", "value": "20" },
+                { "key": "sort", "value": "fechaCreacion,desc" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Consultar un ticket",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/tickets/{{ticketId}}", "host": ["{{baseUrl}}"], "path": ["api", "tickets", "{{ticketId}}"] }
+          }
+        },
+        {
+          "name": "Asignar técnico (rol SOPORTE)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"tecnicoId\": 5\n}" },
+            "url": { "raw": "{{baseUrl}}/api/tickets/{{ticketId}}/asignar", "host": ["{{baseUrl}}"], "path": ["api", "tickets", "{{ticketId}}", "asignar"] }
+          }
+        },
+        {
+          "name": "Actualizar estado",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"estado\": \"EN_PROCESO\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/tickets/{{ticketId}}/estado", "host": ["{{baseUrl}}"], "path": ["api", "tickets", "{{ticketId}}", "estado"] }
+          }
+        },
+        {
+          "name": "Historial de estados",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/tickets/{{ticketId}}/historial", "host": ["{{baseUrl}}"], "path": ["api", "tickets", "{{ticketId}}", "historial"] }
+          }
+        },
+        {
+          "name": "Métricas por categoría, prioridad y estado",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/tickets/metricas", "host": ["{{baseUrl}}"], "path": ["api", "tickets", "metricas"] }
+          }
+        },
+        {
+          "name": "Eliminar ticket",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{baseUrl}}/api/tickets/{{ticketId}}", "host": ["{{baseUrl}}"], "path": ["api", "tickets", "{{ticketId}}"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Usuarios",
+      "item": [
+        {
+          "name": "Crear usuario",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nombre\": \"Pedro Gil\",\n  \"correo\": \"pedro.gil@empresa.com\",\n  \"password\": \"Segura123*\",\n  \"rol\": \"SOPORTE\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/usuarios", "host": ["{{baseUrl}}"], "path": ["api", "usuarios"] }
+          }
+        },
+        {
+          "name": "Consultar técnicos de soporte",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/usuarios?rol=SOPORTE",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "usuarios"],
+              "query": [{ "key": "rol", "value": "SOPORTE" }]
+            }
+          }
+        },
+        {
+          "name": "Consultar un usuario",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/usuarios/1", "host": ["{{baseUrl}}"], "path": ["api", "usuarios", "1"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Casos de error",
+      "item": [
+        {
+          "name": "404 - Ticket inexistente",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/tickets/9999", "host": ["{{baseUrl}}"], "path": ["api", "tickets", "9999"] }
+          }
+        },
+        {
+          "name": "400 - Datos obligatorios vacíos",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"titulo\": \"\",\n  \"descripcion\": \"corta\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/tickets", "host": ["{{baseUrl}}"], "path": ["api", "tickets"] }
+          }
+        },
+        {
+          "name": "422 - Técnico sin rol SOPORTE",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"tecnicoId\": 3\n}" },
+            "url": { "raw": "{{baseUrl}}/api/tickets/{{ticketId}}/asignar", "host": ["{{baseUrl}}"], "path": ["api", "tickets", "{{ticketId}}", "asignar"] }
+          }
+        },
+        {
+          "name": "400 - Estado inválido",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"estado\": \"PAUSADO\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/tickets/{{ticketId}}/estado", "host": ["{{baseUrl}}"], "path": ["api", "tickets", "{{ticketId}}", "estado"] }
+          }
+        },
+        {
+          "name": "400 - Prioridad inválida en el filtro",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/tickets?prioridad=URGENTE",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "tickets"],
+              "query": [{ "key": "prioridad", "value": "URGENTE" }]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

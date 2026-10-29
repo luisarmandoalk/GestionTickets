@@ -1,0 +1,41 @@
+spring:
+  application:
+    name: gestion-tickets-ia
+  config:
+    # Permite ejecutar localmente con un archivo .env (que nunca se sube al repositorio).
+    import: optional:file:.env[.properties]
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/tickets_db}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        default_batch_fetch_size: 50
+  flyway:
+    # db/datos carga usuarios de demostración; para omitirlos: FLYWAY_LOCATIONS=classpath:db/migration
+    locations: ${FLYWAY_LOCATIONS:classpath:db/migration,classpath:db/datos}
+  data:
+    web:
+      pageable:
+        max-page-size: 100
+
+app:
+  ia:
+    modo: ${AI_MODE:auto}
+    respaldo-con-reglas: ${AI_FALLBACK:true}
+    base-url: ${AI_BASE_URL:https://api.groq.com/openai/v1}
+    api-key: ${AI_API_KEY:}
+    modelo: ${AI_MODEL:llama-3.3-70b-versatile}
+    timeout: ${AI_TIMEOUT:15s}
+    reintentos: ${AI_RETRIES:1}
+    espera-entre-reintentos: 500ms
+    forzar-respuesta-json: ${AI_JSON_MODE:true}
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: method
