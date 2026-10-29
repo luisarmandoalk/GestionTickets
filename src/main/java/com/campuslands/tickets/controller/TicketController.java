@@ -78,34 +78,38 @@ public class TicketController {
 
     @GetMapping("/{id}")
     @Operation(summary = "Consultar un ticket", description = "Incluye el análisis realizado por la IA")
-    public TicketResponse obtener(@PathVariable Long id) {
+    public TicketResponse obtener(@Parameter(description = "Id del ticket", example = "1") @PathVariable Long id) {
         return ticketService.obtener(id);
     }
 
     @PatchMapping("/{id}/estado")
     @Operation(summary = "Actualizar el estado",
             description = "ABIERTO → EN_PROCESO → RESUELTO → CERRADO; RESUELTO puede volver a EN_PROCESO")
-    public TicketResponse actualizarEstado(@PathVariable Long id,
-                                           @Valid @RequestBody ActualizarEstadoRequest solicitud) {
+    public TicketResponse actualizarEstado(
+            @Parameter(description = "Id del ticket", example = "1") @PathVariable Long id,
+            @Valid @RequestBody ActualizarEstadoRequest solicitud) {
         return ticketService.actualizarEstado(id, solicitud.estado());
     }
 
     @PatchMapping("/{id}/asignar")
     @Operation(summary = "Asignar un técnico", description = "Solo se pueden asignar usuarios con rol SOPORTE")
-    public TicketResponse asignarTecnico(@PathVariable Long id, @Valid @RequestBody AsignarTecnicoRequest solicitud) {
+    public TicketResponse asignarTecnico(
+            @Parameter(description = "Id del ticket", example = "1") @PathVariable Long id,
+            @Valid @RequestBody AsignarTecnicoRequest solicitud) {
         return ticketService.asignarTecnico(id, solicitud.tecnicoId());
     }
 
     @DeleteMapping("/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     @Operation(summary = "Eliminar un ticket", description = "Eliminación lógica: el ticket deja de aparecer en la API")
-    public void eliminar(@PathVariable Long id) {
+    public void eliminar(@Parameter(description = "Id del ticket", example = "1") @PathVariable Long id) {
         ticketService.eliminar(id);
     }
 
     @GetMapping("/{id}/historial")
     @Operation(summary = "Historial de cambios de estado")
-    public List<HistorialEstadoResponse> historial(@PathVariable Long id) {
+    public List<HistorialEstadoResponse> historial(
+            @Parameter(description = "Id del ticket", example = "1") @PathVariable Long id) {
         return ticketService.historial(id);
     }
 

@@ -5,6 +5,7 @@ import com.campuslands.tickets.dto.UsuarioResponse;
 import com.campuslands.tickets.entity.Rol;
 import com.campuslands.tickets.service.UsuarioService;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import java.net.URI;
@@ -49,7 +50,7 @@ public class UsuarioController {
 
     @GetMapping("/{id}")
     @Operation(summary = "Consultar un usuario")
-    public UsuarioResponse obtener(@PathVariable Long id) {
+    public UsuarioResponse obtener(@Parameter(description = "Id del usuario", example = "1") @PathVariable Long id) {
         return usuarioService.obtener(id);
     }
 }
