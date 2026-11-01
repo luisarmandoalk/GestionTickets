@@ -3,7 +3,6 @@ package com.campuslands.tickets.exception;
 import com.campuslands.tickets.dto.ErrorResponse;
 import com.campuslands.tickets.dto.ErrorResponse.ErrorCampo;
 import jakarta.servlet.http.HttpServletRequest;
-import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
@@ -35,6 +34,18 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponse> manejarNoEncontrado(RecursoNoEncontradoException ex,
                                                              HttpServletRequest solicitud) {
         return responder(HttpStatus.NOT_FOUND, ex.getMessage(), solicitud);
+    }
+
+    @ExceptionHandler(CredencialesInvalidasException.class)
+    public ResponseEntity<ErrorResponse> manejarCredencialesInvalidas(CredencialesInvalidasException ex,
+                                                                      HttpServletRequest solicitud) {
+        return responder(HttpStatus.UNAUTHORIZED, ex.getMessage(), solicitud);
+    }
+
+    @ExceptionHandler(AccesoDenegadoException.class)
+    public ResponseEntity<ErrorResponse> manejarAccesoDenegado(AccesoDenegadoException ex,
+                                                               HttpServletRequest solicitud) {
+        return responder(HttpStatus.FORBIDDEN, ex.getMessage(), solicitud);
     }
 
     @ExceptionHandler(TecnicoInvalidoException.class)
@@ -136,9 +147,7 @@ public class GlobalExceptionHandler {
 
     private ResponseEntity<ErrorResponse> responder(HttpStatus estado, String mensaje, HttpServletRequest solicitud,
                                                     List<ErrorCampo> errores) {
-        ErrorResponse cuerpo = new ErrorResponse(LocalDateTime.now(), estado.value(), estado.name(), mensaje,
-                solicitud.getRequestURI(), errores);
-        return ResponseEntity.status(estado).body(cuerpo);
+        return ResponseEntity.status(estado).body(ErrorResponse.de(estado, mensaje, solicitud.getRequestURI(), errores));
     }
 
     private static String describirErrorDeSpring(Exception ex, org.springframework.web.ErrorResponse errorDeSpring,

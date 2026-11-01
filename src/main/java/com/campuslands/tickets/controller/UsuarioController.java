@@ -32,7 +32,7 @@ public class UsuarioController {
     }
 
     @PostMapping
-    @Operation(summary = "Crear un usuario", description = "La contraseña se almacena cifrada con BCrypt")
+    @Operation(summary = "Crear un usuario", description = "La contraseña se almacena cifrada con BCrypt. Rol: ADMIN")
     public ResponseEntity<UsuarioResponse> crear(@Valid @RequestBody CrearUsuarioRequest solicitud) {
         UsuarioResponse creado = usuarioService.crear(solicitud);
         URI ubicacion = ServletUriComponentsBuilder.fromCurrentRequest()
@@ -43,13 +43,13 @@ public class UsuarioController {
     }
 
     @GetMapping
-    @Operation(summary = "Consultar usuarios", description = "Filtro opcional por rol")
+    @Operation(summary = "Consultar usuarios", description = "Filtro opcional por rol. Rol: ADMIN o SOPORTE")
     public List<UsuarioResponse> listar(@RequestParam(required = false) Rol rol) {
         return usuarioService.listar(rol);
     }
 
     @GetMapping("/{id}")
-    @Operation(summary = "Consultar un usuario")
+    @Operation(summary = "Consultar un usuario", description = "Rol: ADMIN o SOPORTE")
     public UsuarioResponse obtener(@Parameter(description = "Id del usuario", example = "1") @PathVariable Long id) {
         return usuarioService.obtener(id);
     }

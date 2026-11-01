@@ -29,11 +29,16 @@ app:
     respaldo-con-reglas: ${AI_FALLBACK:true}
     base-url: ${AI_BASE_URL:https://api.groq.com/openai/v1}
     api-key: ${AI_API_KEY:}
-    modelo: ${AI_MODEL:llama-3.3-70b-versatile}
+    modelo: ${AI_MODEL:openai/gpt-oss-120b}
     timeout: ${AI_TIMEOUT:15s}
     reintentos: ${AI_RETRIES:1}
     espera-entre-reintentos: 500ms
     forzar-respuesta-json: ${AI_JSON_MODE:true}
+  jwt:
+    # Mínimo 32 caracteres. Si se deja vacío se genera una clave aleatoria en cada arranque.
+    secreto: ${JWT_SECRET:}
+    expiracion: ${JWT_EXPIRATION:1h}
+    emisor: gestion-tickets-ia
 
 springdoc:
   swagger-ui:

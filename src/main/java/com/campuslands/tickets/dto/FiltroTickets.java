@@ -13,4 +13,9 @@ public record FiltroTickets(
         Long tecnicoId,
         String texto
 ) {
+
+    /** El mismo filtro restringido a los tickets de un solicitante. */
+    public FiltroTickets soloDelSolicitante(Long solicitanteId) {
+        return new FiltroTickets(estado, categoria, prioridad, solicitanteId, tecnicoId, texto);
+    }
 }

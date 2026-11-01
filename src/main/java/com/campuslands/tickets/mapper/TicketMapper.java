@@ -1,7 +1,9 @@
 package com.campuslands.tickets.mapper;
 
+import com.campuslands.tickets.dto.AuditoriaTicketResponse;
 import com.campuslands.tickets.dto.HistorialEstadoResponse;
 import com.campuslands.tickets.dto.TicketResponse;
+import com.campuslands.tickets.entity.AuditoriaTicket;
 import com.campuslands.tickets.entity.HistorialEstadoTicket;
 import com.campuslands.tickets.entity.Ticket;
 import java.util.List;
@@ -35,5 +37,10 @@ public class TicketMapper {
 
     public HistorialEstadoResponse aResponse(HistorialEstadoTicket cambio) {
         return new HistorialEstadoResponse(cambio.getEstadoAnterior(), cambio.getEstadoNuevo(), cambio.getFechaCambio());
+    }
+
+    public AuditoriaTicketResponse aResponse(AuditoriaTicket registro) {
+        return new AuditoriaTicketResponse(registro.getAccion(), registro.getDetalle(),
+                usuarioMapper.aResumen(registro.getUsuario()), registro.getFecha());
     }
 }

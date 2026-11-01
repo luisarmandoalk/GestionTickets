@@ -12,6 +12,9 @@ El analizador usa un modelo de lenguaje (cualquier proveedor con API compatible 
 OpenAI, Ollama…). Si no hay API key o el modelo falla, usa un clasificador local por palabras clave. Así la
 aplicación siempre funciona, también sin conexión a un proveedor.
 
+El acceso se protege con JWT y permisos por rol (ADMIN, SOPORTE, USUARIO). Cada cambio sobre un ticket queda en
+una auditoría con el usuario que lo hizo, y las métricas y los análisis del modelo se guardan en caché.
+
 ## Contenido
 
 1. [Tecnologías](#tecnologías)
@@ -21,13 +24,14 @@ aplicación siempre funciona, también sin conexión a un proveedor.
 5. [Variables de entorno](#variables-de-entorno)
 6. [Crear la base de datos](#crear-la-base-de-datos)
 7. [Ejecutar la aplicación](#ejecutar-la-aplicación)
-8. [Endpoints](#endpoints)
-9. [Ejemplos de solicitudes](#ejemplos-de-solicitudes)
-10. [Manejo de errores](#manejo-de-errores)
-11. [Estrategia de inteligencia artificial](#estrategia-de-inteligencia-artificial)
-12. [Decisiones técnicas](#decisiones-técnicas)
-13. [Pruebas](#pruebas)
-14. [Limitaciones conocidas](#limitaciones-conocidas)
+8. [Autenticación y roles](#autenticación-y-roles)
+9. [Endpoints](#endpoints)
+10. [Ejemplos de solicitudes](#ejemplos-de-solicitudes)
+11. [Manejo de errores](#manejo-de-errores)
+12. [Estrategia de inteligencia artificial](#estrategia-de-inteligencia-artificial)
+13. [Decisiones técnicas](#decisiones-técnicas)
+14. [Pruebas](#pruebas)
+15. [Limitaciones conocidas](#limitaciones-conocidas)
 
 ## Tecnologías
 
@@ -37,21 +41,26 @@ aplicación siempre funciona, también sin conexión a un proveedor.
 | Base de datos | PostgreSQL 16, migraciones con Flyway |
 | Inteligencia artificial | API `/chat/completions` compatible con OpenAI, consumida con `RestClient`; clasificador por reglas como alternativa |
 | Documentación | springdoc-openapi (Swagger UI) y colección de Postman |
-| Seguridad de contraseñas | BCrypt (`spring-security-crypto`) |
-| Pruebas | JUnit 5, Mockito, MockMvc, `MockRestServiceServer`, PostgreSQL embebido (zonky) |
+| Seguridad | Spring Security con JWT (OAuth2 Resource Server, firma HS256 con Nimbus) y contraseñas con BCrypt |
+| Caché | Spring Cache con Caffeine |
+| Pruebas | JUnit 5, Mockito, MockMvc, Spring Security Test, `MockRestServiceServer`, PostgreSQL embebido (zonky) |
 | Construcción y despliegue | Maven Wrapper, Dockerfile y Docker Compose |
 
 ## Arquitectura
 
 ```mermaid
 flowchart LR
-    Cliente([Cliente HTTP]) --> C[controller<br/>TicketController · UsuarioController]
-    C -->|DTO| S[service<br/>TicketService · UsuarioService]
+    Cliente([Cliente HTTP]) -->|Bearer JWT| SEC[security<br/>SecurityFilterChain · roles por ruta]
+    SEC -.401 / 403.-> ERR[ManejadorErroresSeguridad]
+    SEC --> C[controller<br/>Autenticacion · Ticket · Usuario]
+    C -->|DTO + UsuarioAutenticado| S[service<br/>Ticket · Usuario · Autenticacion · Auditoria]
     S --> M[mapper<br/>Entidad → DTO]
     S --> R[repository<br/>Spring Data JPA + Specifications]
     R --> DB[(PostgreSQL)]
+    S --> CA[(Caché Caffeine<br/>métricas · análisis IA)]
     S --> A{{ai<br/>AnalizadorTicketService}}
-    A --> RES[AnalizadorConRespaldo]
+    A --> CACHE[AnalizadorConCache]
+    CACHE --> RES[AnalizadorConRespaldo]
     RES --> LLM[AnalizadorLlmService<br/>prompt + validación + reintentos]
     RES --> REG[AnalizadorReglasService<br/>palabras clave]
     LLM -->|HTTPS JSON| P[(Proveedor LLM<br/>Groq · OpenRouter · OpenAI · Ollama)]
@@ -61,14 +70,15 @@ flowchart LR
 | Paquete | Responsabilidad |
 |---|---|
 | `controller` | Endpoints REST. Reciben y devuelven DTO, nunca entidades JPA. |
-| `service` | Reglas de negocio: ciclo de vida del ticket, asignación de técnicos, historial y métricas. |
+| `service` | Reglas de negocio: ciclo de vida del ticket, asignación de técnicos, qué tickets ve cada usuario, historial, auditoría, métricas e inicio de sesión. |
 | `repository` | Repositorios Spring Data JPA, filtros dinámicos (`TicketSpecifications`) y proyecciones de conteo. |
 | `entity` | Entidades JPA y enumeraciones del dominio. |
 | `dto` | Objetos de solicitud y respuesta, con sus validaciones. |
 | `mapper` | Conversión de entidades a DTO. |
 | `ai` | Analizadores intercambiables detrás de la interfaz `AnalizadorTicketService`. |
 | `exception` | Excepciones personalizadas y `@RestControllerAdvice` con una respuesta de error única. |
-| `config` | Selección del analizador, propiedades de IA, OpenAPI y cifrado de contraseñas. |
+| `security` | Cadena de filtros, permisos por rol, emisión y validación de JWT, cifrado de contraseñas y respuestas 401/403. |
+| `config` | Selección del analizador, propiedades de IA, caché y OpenAPI. |
 
 ## Modelo de datos
 
@@ -78,6 +88,8 @@ erDiagram
     USUARIO |o--o{ TICKET : "atiende como técnico"
     TICKET ||--o{ TICKET_ETIQUETA : "tiene"
     TICKET ||--o{ HISTORIAL_ESTADO_TICKET : "registra"
+    TICKET ||--o{ AUDITORIA_TICKET : "audita"
+    USUARIO ||--o{ AUDITORIA_TICKET : "realiza"
 
     USUARIO {
         bigint id PK
@@ -115,11 +127,20 @@ erDiagram
         varchar estado_nuevo
         timestamp fecha_cambio
     }
+    AUDITORIA_TICKET {
+        bigint id PK
+        bigint ticket_id FK
+        varchar accion "CREACION | CAMBIO_ESTADO | ASIGNACION | ELIMINACION"
+        varchar detalle
+        bigint usuario_id FK "quién hizo el cambio"
+        timestamp fecha
+    }
 ```
 
-El esquema está en [`V1__crear_esquema.sql`](src/main/resources/db/migration/V1__crear_esquema.sql). Incluye
-claves foráneas, restricciones `CHECK` para cada enumeración y para la longitud del título y la descripción,
-un correo único e índices para los filtros.
+El esquema está en [`V1__crear_esquema.sql`](src/main/resources/db/migration/V1__crear_esquema.sql) y la
+auditoría en [`V2__crear_auditoria_ticket.sql`](src/main/resources/db/migration/V2__crear_auditoria_ticket.sql).
+Incluyen claves foráneas, restricciones `CHECK` para cada enumeración y para la longitud del título y la
+descripción, un correo único e índices para los filtros.
 
 ## Requisitos de ejecución
 
@@ -141,11 +162,13 @@ también lo usa. El archivo `.env` está en `.gitignore`, así que ninguna clave
 | `AI_MODE` | `auto` | `auto`: modelo si hay `AI_API_KEY`, si no reglas · `llm`: siempre el modelo · `reglas`: nunca llama al proveedor |
 | `AI_BASE_URL` | `https://api.groq.com/openai/v1` | URL base del proveedor compatible con OpenAI |
 | `AI_API_KEY` | *(vacía)* | API key del proveedor |
-| `AI_MODEL` | `llama-3.3-70b-versatile` | Modelo a usar. Consulte la lista vigente de su proveedor. |
+| `AI_MODEL` | `openai/gpt-oss-120b` | Modelo a usar (probado en Groq). Consulte la lista vigente de su proveedor. |
 | `AI_FALLBACK` | `true` | Si el modelo falla, clasificar con reglas (`true`) o responder error 503/502 (`false`) |
 | `AI_TIMEOUT` | `15s` | Tiempo límite de conexión y de respuesta del modelo |
 | `AI_RETRIES` | `1` | Reintentos ante errores transitorios (timeout, 429, 5xx, respuesta inválida) |
 | `AI_JSON_MODE` | `true` | Envía `response_format: json_object`; desactívelo si el modelo no lo soporta |
+| `JWT_SECRET` | *(vacía)* | Clave para firmar los tokens, de al menos 32 caracteres. Vacía: se genera una aleatoria en cada arranque y los tokens dejan de servir al reiniciar |
+| `JWT_EXPIRATION` | `1h` | Vigencia de los tokens |
 | `FLYWAY_LOCATIONS` | `classpath:db/migration,classpath:db/datos` | Use `classpath:db/migration` para no cargar los usuarios de demostración |
 
 Ejemplos de configuración del proveedor:
@@ -174,13 +197,13 @@ psql -U postgres -c "CREATE DATABASE tickets_db;"
 
 Usuarios de demostración (contraseña de todos: `Demo1234*`):
 
-| id | Nombre | Rol |
-|---|---|---|
-| 1 | Laura Gómez | USUARIO |
-| 2 | Carlos Pérez | USUARIO |
-| 3 | Andrea Ruiz | ADMIN |
-| 4 | Miguel Torres | SOPORTE |
-| 5 | Sofía Ramírez | SOPORTE |
+| id | Nombre | Correo | Rol |
+|---|---|---|---|
+| 1 | Laura Gómez | `laura.gomez@empresa.com` | USUARIO |
+| 2 | Carlos Pérez | `carlos.perez@empresa.com` | USUARIO |
+| 3 | Andrea Ruiz | `andrea.ruiz@empresa.com` | ADMIN |
+| 4 | Miguel Torres | `miguel.torres@empresa.com` | SOPORTE |
+| 5 | Sofía Ramírez | `sofia.ramirez@empresa.com` | SOPORTE |
 
 ## Ejecutar la aplicación
 
@@ -202,6 +225,10 @@ docker compose up --build
 
 Con Ollama en el equipo anfitrión, use `AI_BASE_URL=http://host.docker.internal:11434/v1`.
 
+El contenedor de la aplicación usa la hora de Colombia (`TZ: America/Bogota` en `docker-compose.yml`); sin ese
+ajuste las fechas saldrían en UTC. Para detener los contenedores conservando los datos use
+`docker compose down`, y para borrar también la base, `docker compose down -v`.
+
 ### Opción 3: sin PostgreSQL ni Docker (para revisar rápido)
 
 ```bash
@@ -218,26 +245,55 @@ igual, pero los datos se pierden al detenerla.
 - OpenAPI (JSON): `http://localhost:8080/v3/api-docs`
 - Colección de Postman: [`docs/postman/gestion-tickets-ia.postman_collection.json`](docs/postman/gestion-tickets-ia.postman_collection.json)
 
+Todas las rutas, salvo el inicio de sesión y la documentación, piden un token: vea la sección siguiente.
+
+## Autenticación y roles
+
+1. Inicie sesión con `POST /api/auth/login` y uno de los usuarios de demostración. La respuesta trae el token
+   y su vigencia en segundos.
+2. Envíe el token en cada solicitud con la cabecera `Authorization: Bearer <token>`. En Swagger UI, use el botón
+   **Authorize**. En Postman, las solicitudes de inicio de sesión guardan el token en la colección solas.
+
+El token es un JWT firmado por la aplicación (HS256). Su sujeto es el id del usuario y lleva el rol como claim.
+La sesión no se guarda en el servidor.
+
+| Operación | USUARIO | SOPORTE | ADMIN |
+|---|:-:|:-:|:-:|
+| Crear ticket | Solo a su nombre | ✔ | ✔ |
+| Consultar tickets, un ticket y su historial | Solo los suyos | ✔ | ✔ |
+| Cambiar estado y asignar técnico | | ✔ | ✔ |
+| Eliminar ticket y consultar su auditoría | | | ✔ |
+| Métricas y consulta de usuarios | | ✔ | ✔ |
+| Crear usuarios | | | ✔ |
+
+Los permisos por ruta están en
+[`SecurityConfig`](src/main/java/com/campuslands/tickets/security/SecurityConfig.java). La regla "solo los suyos"
+depende de cada ticket, así que la aplica el servicio. Sin token se responde `401` y con un rol sin permiso
+`403`, con la misma estructura de error del resto de la API.
+
 ## Endpoints
 
-| Método | Ruta | Descripción | Respuesta exitosa |
-|---|---|---|---|
-| `POST` | `/api/tickets` | Crea un ticket y lo clasifica con IA | `201` + cabecera `Location` |
-| `GET` | `/api/tickets` | Consulta tickets con filtros, paginación y ordenamiento | `200` |
-| `GET` | `/api/tickets/{id}` | Consulta un ticket con su análisis de IA | `200` |
-| `PATCH` | `/api/tickets/{id}/estado` | Cambia el estado según el ciclo de vida | `200` |
-| `PATCH` | `/api/tickets/{id}/asignar` | Asigna un técnico con rol SOPORTE | `200` |
-| `DELETE` | `/api/tickets/{id}` | Elimina el ticket (eliminación lógica) | `204` |
-| `GET` | `/api/tickets/{id}/historial` | Historial de cambios de estado | `200` |
-| `GET` | `/api/tickets/metricas` | Totales por categoría, prioridad y estado | `200` |
-| `POST` | `/api/usuarios` | Crea un usuario (contraseña cifrada con BCrypt) | `201` + cabecera `Location` |
-| `GET` | `/api/usuarios?rol=SOPORTE` | Consulta usuarios, con filtro opcional por rol | `200` |
-| `GET` | `/api/usuarios/{id}` | Consulta un usuario | `200` |
+| Método | Ruta | Descripción | Rol | Respuesta exitosa |
+|---|---|---|---|---|
+| `POST` | `/api/auth/login` | Inicia sesión y devuelve el token JWT | Público | `200` |
+| `POST` | `/api/tickets` | Crea un ticket y lo clasifica con IA | Cualquiera | `201` + cabecera `Location` |
+| `GET` | `/api/tickets` | Consulta tickets con filtros, paginación y ordenamiento | Cualquiera | `200` |
+| `GET` | `/api/tickets/{id}` | Consulta un ticket con su análisis de IA | Cualquiera | `200` |
+| `PATCH` | `/api/tickets/{id}/estado` | Cambia el estado según el ciclo de vida | SOPORTE, ADMIN | `200` |
+| `PATCH` | `/api/tickets/{id}/asignar` | Asigna un técnico con rol SOPORTE | SOPORTE, ADMIN | `200` |
+| `DELETE` | `/api/tickets/{id}` | Elimina el ticket (eliminación lógica) | ADMIN | `204` |
+| `GET` | `/api/tickets/{id}/historial` | Historial de cambios de estado | Cualquiera | `200` |
+| `GET` | `/api/tickets/{id}/auditoria` | Quién hizo cada cambio, también para tickets eliminados | ADMIN | `200` |
+| `GET` | `/api/tickets/metricas` | Totales por categoría, prioridad y estado | SOPORTE, ADMIN | `200` |
+| `POST` | `/api/usuarios` | Crea un usuario (contraseña cifrada con BCrypt) | ADMIN | `201` + cabecera `Location` |
+| `GET` | `/api/usuarios?rol=SOPORTE` | Consulta usuarios, con filtro opcional por rol | SOPORTE, ADMIN | `200` |
+| `GET` | `/api/usuarios/{id}` | Consulta un usuario | SOPORTE, ADMIN | `200` |
 
 **Filtros de `GET /api/tickets`** (todos opcionales y combinables): `estado`, `categoria`, `prioridad`,
 `usuarioId` (solicitante), `tecnicoId`, `texto` (busca en título y descripción, sin distinguir mayúsculas),
 `page`, `size` (máximo 100) y `sort` (por ejemplo, `sort=fechaActualizacion,desc` o `sort=titulo,asc`). Por
-defecto se ordena por `fechaCreacion` descendente, de 20 en 20.
+defecto se ordena por `fechaCreacion` descendente, de 20 en 20. Para un USUARIO, el filtro `usuarioId` se
+reemplaza siempre por el suyo.
 
 **Ciclo de vida del estado:**
 
@@ -253,10 +309,32 @@ stateDiagram-v2
 
 ## Ejemplos de solicitudes
 
+Iniciar sesión (Laura, rol USUARIO) y guardar el token:
+
+```bash
+curl -X POST http://localhost:8080/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"correo": "laura.gomez@empresa.com", "password": "Demo1234*"}'
+```
+
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiJ9...",
+  "tipo": "Bearer",
+  "expiraEn": 3600,
+  "usuario": { "id": 1, "nombre": "Laura Gómez", "correo": "laura.gomez@empresa.com", "rol": "USUARIO", "fechaCreacion": "2026-07-30T19:30:00" }
+}
+```
+
+```bash
+TOKEN="eyJhbGciOiJIUzI1NiJ9..."   # el valor de "token"
+```
+
 Crear un ticket:
 
 ```bash
 curl -X POST http://localhost:8080/api/tickets \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"titulo": "Problema con internet", "descripcion": "Desde esta mañana no puedo conectarme a internet y tengo una reunión importante en 20 minutos.", "usuarioId": 1}'
 ```
@@ -281,23 +359,38 @@ Respuesta (`201 Created`):
 }
 ```
 
-Otras operaciones:
+Otras operaciones (asignar y cambiar estado piden un token de SOPORTE o ADMIN; eliminar y la auditoría, de
+ADMIN):
 
 ```bash
 # Filtrar
-curl "http://localhost:8080/api/tickets?estado=ABIERTO&prioridad=ALTA"
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8080/api/tickets?estado=ABIERTO&prioridad=ALTA"
 
 # Consultar uno
-curl http://localhost:8080/api/tickets/1
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/tickets/1
 
 # Asignar técnico (el usuario 5 tiene rol SOPORTE)
-curl -X PATCH http://localhost:8080/api/tickets/1/asignar -H "Content-Type: application/json" -d '{"tecnicoId": 5}'
+curl -X PATCH http://localhost:8080/api/tickets/1/asignar -H "Authorization: Bearer $TOKEN_SOPORTE" \
+  -H "Content-Type: application/json" -d '{"tecnicoId": 5}'
 
 # Cambiar estado
-curl -X PATCH http://localhost:8080/api/tickets/1/estado -H "Content-Type: application/json" -d '{"estado": "EN_PROCESO"}'
+curl -X PATCH http://localhost:8080/api/tickets/1/estado -H "Authorization: Bearer $TOKEN_SOPORTE" \
+  -H "Content-Type: application/json" -d '{"estado": "EN_PROCESO"}'
 
-# Eliminar
-curl -X DELETE http://localhost:8080/api/tickets/1
+# Eliminar y consultar la auditoría
+curl -X DELETE -H "Authorization: Bearer $TOKEN_ADMIN" http://localhost:8080/api/tickets/1
+curl -H "Authorization: Bearer $TOKEN_ADMIN" http://localhost:8080/api/tickets/1/auditoria
+```
+
+Auditoría de un ticket (`GET /api/tickets/1/auditoria`):
+
+```json
+[
+  { "accion": "CREACION", "detalle": "Ticket creado y clasificado como CONECTIVIDAD / ALTA (MODELO_LENGUAJE)", "usuario": { "id": 1, "nombre": "Laura Gómez" }, "fecha": "2026-07-30T19:30:00" },
+  { "accion": "ASIGNACION", "detalle": "Técnico asignado: Sofía Ramírez (id 5)", "usuario": { "id": 5, "nombre": "Sofía Ramírez" }, "fecha": "2026-07-30T19:35:00" },
+  { "accion": "CAMBIO_ESTADO", "detalle": "Estado: ABIERTO → EN_PROCESO", "usuario": { "id": 5, "nombre": "Sofía Ramírez" }, "fecha": "2026-07-30T19:36:00" },
+  { "accion": "ELIMINACION", "detalle": "Ticket eliminado (eliminación lógica)", "usuario": { "id": 3, "nombre": "Andrea Ruiz" }, "fecha": "2026-07-30T19:40:00" }
+]
 ```
 
 ## Manejo de errores
@@ -334,6 +427,8 @@ Los errores de validación agregan el detalle por campo en `errores`:
 |---|---|
 | Datos obligatorios vacíos, longitudes, correo inválido | `400 BAD_REQUEST` (con `errores`) |
 | Categoría, prioridad o estado inválidos (en el cuerpo o en los filtros); JSON mal formado; campo de ordenamiento inexistente | `400 BAD_REQUEST` (indica los valores permitidos) |
+| Sin token, token inválido o vencido, correo o contraseña incorrectos | `401 UNAUTHORIZED` |
+| Rol sin permiso para la operación; un USUARIO con el ticket de otra persona | `403 FORBIDDEN` |
 | Ticket, usuario o técnico inexistente | `404 NOT_FOUND` |
 | Transición de estado no permitida, asignar técnico a un ticket RESUELTO o CERRADO, correo duplicado | `409 CONFLICT` |
 | Técnico que existe pero no tiene rol SOPORTE | `422 UNPROCESSABLE_CONTENT` |
@@ -356,8 +451,8 @@ public interface AnalizadorTicketService {
 | Configuración | Analizador activo |
 |---|---|
 | `AI_MODE=reglas`, o `auto` sin `AI_API_KEY` | `AnalizadorReglasService` |
-| `AI_MODE=llm`, o `auto` con `AI_API_KEY`, y `AI_FALLBACK=true` | `AnalizadorConRespaldo` (modelo → reglas si falla) |
-| `AI_MODE=llm` y `AI_FALLBACK=false` | `AnalizadorLlmService` (los fallos se responden como 502/503) |
+| `AI_MODE=llm`, o `auto` con `AI_API_KEY`, y `AI_FALLBACK=true` | `AnalizadorConCache` → `AnalizadorConRespaldo` (modelo → reglas si falla) |
+| `AI_MODE=llm` y `AI_FALLBACK=false` | `AnalizadorConCache` → `AnalizadorLlmService` (los fallos se responden como 502/503) |
 
 ### Opción A: modelo de lenguaje (`AnalizadorLlmService`)
 
@@ -382,6 +477,9 @@ public interface AnalizadorTicketService {
    - Los errores 401/403/400 no se reintentan.
 5. **Respaldo.** Si al final el modelo falla, `AnalizadorConRespaldo` clasifica con reglas y el ticket queda con
    `origenAnalisis = REGLAS`, para que se sepa qué analizador lo clasificó.
+6. **Caché.** `AnalizadorConCache` guarda el análisis del modelo por título y descripción durante una hora
+   (máximo 500 entradas). Un ticket repetido no vuelve a llamar al proveedor. Los resultados del respaldo no se
+   guardan, para que el siguiente intento vuelva a usar el modelo.
 
 Se usó `RestClient` contra el contrato `/chat/completions` en lugar de un SDK específico. Ese contrato lo
 comparten Groq, OpenRouter, OpenAI y Ollama, así que cambiar de proveedor es solo cambiar variables de entorno.
@@ -430,6 +528,21 @@ comparten Groq, OpenRouter, OpenAI y Ollama, así que cambiar de proveedor es so
   entidades coincidan con él. Los usuarios de demostración son una migración repetible e idempotente en
   `db/datos`, que se puede omitir con `FLYWAY_LOCATIONS`.
 - **Fechas** con el formato del enunciado (`yyyy-MM-dd'T'HH:mm:ss`), en la zona horaria del servidor.
+- **JWT emitido por la propia aplicación** con el soporte de OAuth2 Resource Server de Spring Security (Nimbus,
+  HS256), sin librerías adicionales. Sin estado en el servidor. Sin `JWT_SECRET` se genera una clave aleatoria
+  para que la aplicación arranque sin configuración; en un despliegue real se debe definir.
+- **Permisos en dos niveles.** Los permisos por rol se declaran por ruta en `SecurityConfig`, en un solo lugar.
+  La regla que depende del dato ("un USUARIO solo ve y registra sus tickets") está en el servicio, que recibe
+  el usuario autenticado como parámetro y no lo lee de un contexto global, por lo que se prueba sin Spring.
+- **El cuerpo de creación conserva `usuarioId`**, como pide el enunciado. Un USUARIO solo puede enviar su
+  propio id; ADMIN y SOPORTE pueden registrar tickets en nombre de otra persona.
+- **Auditoría en tabla propia** (`auditoria_ticket`). Registra acción, detalle, usuario y fecha de cada creación,
+  cambio de estado, asignación y eliminación. Se escribe en la misma transacción del cambio, y guarda el id del
+  ticket en lugar de una relación JPA para poder consultarla aunque el ticket esté eliminado. El historial de
+  estados se mantiene aparte porque responde otra pregunta: por qué estados pasó el ticket.
+- **Caché con Caffeine** detrás de un administrador transaccional: las métricas se invalidan al crear, cambiar
+  de estado o eliminar un ticket, y la invalidación se aplica después del commit, así nadie vuelve a cachear
+  datos sin confirmar.
 
 ## Pruebas
 
@@ -443,30 +556,34 @@ embebido (zonky). Tampoco llaman a un proveedor de IA real, porque el modelo se 
 
 | Prueba | Qué valida |
 |---|---|
-| `TicketServiceImplTest` (Mockito) | Creación de ticket con análisis de IA, ticket inexistente, técnico inexistente o sin rol SOPORTE, asignación a ticket cerrado, transiciones de estado válidas e inválidas, eliminación lógica |
-| `TicketControllerTest` (MockMvc) | Códigos HTTP, cabecera `Location`, formato de fechas, validaciones por campo, estructura de error, enums inválidos en cuerpo y filtros, 409 y 422 |
+| `TicketServiceImplTest` (Mockito) | Creación de ticket con análisis de IA, ticket inexistente, técnico inexistente o sin rol SOPORTE, asignación a ticket cerrado, transiciones de estado válidas e inválidas, eliminación lógica, tickets ajenos para un USUARIO y registro de auditoría de cada cambio |
+| `TicketControllerTest` (MockMvc + Spring Security) | Códigos HTTP, cabecera `Location`, formato de fechas, validaciones por campo, estructura de error, enums inválidos en cuerpo y filtros, 409 y 422; 401 sin token o con token inválido; 403 por rol |
+| `AutenticacionServiceImplTest` | Token firmado con id y rol, contraseña incorrecta, correo inexistente con el mismo mensaje, secreto JWT demasiado corto |
+| `AnalizadorConCacheTest` | Reutiliza el análisis del modelo y no guarda el del respaldo |
 | `AnalizadorLlmServiceTest` | Prompt y cuerpo enviados al proveedor, lectura del JSON, respuestas inválidas, reintentos, 401 sin reintento, timeout |
 | `ValidadorAnalisisIaTest` | Normalización y rechazo de categorías o prioridades fuera del catálogo, límites de resumen y etiquetas |
 | `AnalizadorReglasServiceTest` | Clasificación del ejemplo del enunciado, categorías, prioridades, palabras completas, límites |
 | `AnalizadorConRespaldoTest` | Uso del respaldo cuando el modelo falla |
 | `IaConfigTest` | Selección del analizador según `AI_MODE`, API key y respaldo; clasificación con reglas cuando el proveedor real no responde |
 | `EstadoTicketTest` | Matriz de transiciones del ciclo de vida |
-| `TicketApiIntegracionTest` | Flujo completo contra PostgreSQL real: migraciones, filtros, búsqueda, ordenamiento, historial, eliminación lógica, métricas y usuarios |
+| `TicketApiIntegracionTest` | Flujo completo contra PostgreSQL real con inicio de sesión: migraciones, permisos de cada rol, tickets propios, filtros, búsqueda, ordenamiento, historial, auditoría, eliminación lógica, métricas con caché y usuarios |
 
 ## Limitaciones conocidas
 
-- **Sin autenticación ni autorización.** JWT y permisos por rol son opcionales en el enunciado y no se
-  implementaron, así que cualquier cliente puede invocar todos los endpoints. Si se agregan, el solicitante
-  debería tomarse del token y no del `usuarioId` del cuerpo.
+- **Los tokens no se pueden revocar.** Un token sigue siendo válido hasta que vence, aunque el usuario cambie de
+  rol. No hay token de renovación: al vencer hay que iniciar sesión de nuevo.
+- **La caché es local a cada instancia.** Con varias réplicas, cada una tendría su propia caché. Las métricas
+  pueden tardar hasta 5 minutos en reflejar un cambio hecho por otra réplica.
 - **El clasificador por reglas es aproximado.** Depende de las palabras clave definidas, no entiende negaciones
   complejas ni sinónimos fuera de la lista, y su resumen es extractivo (la primera oración), no una redacción
   nueva.
 - **El modelo de lenguaje no es determinista.** Aun con temperatura 0, la misma descripción puede recibir
   clasificaciones distintas entre modelos o versiones. La validación garantiza el formato, no el criterio.
 - **La llamada al modelo es síncrona.** Crear un ticket tarda lo que tarde el proveedor (hasta `AI_TIMEOUT` por
-  intento, más los reintentos). No hay caché de análisis ni procesamiento asíncrono.
+  intento, más los reintentos). Solo los tickets idénticos aprovechan la caché; no hay procesamiento asíncrono.
 - **Ordenar por `prioridad`, `categoria` o `estado` es alfabético**, no por severidad, porque se guardan como
   texto. Para ver los tickets más graves, filtre por prioridad (`prioridad=CRITICA`).
 - **La clasificación de la IA no se puede corregir manualmente.** No hay un endpoint para cambiar la categoría o
   la prioridad sugeridas.
-- **Las fechas se guardan sin zona horaria** (`TIMESTAMP`), en la hora local del servidor.
+- **Las fechas se guardan sin zona horaria** (`TIMESTAMP`), en la hora local del servidor. En Docker Compose se
+  fija `America/Bogota`; en otro despliegue hay que definir la variable `TZ` del servidor.

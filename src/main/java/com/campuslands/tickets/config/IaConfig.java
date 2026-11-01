@@ -1,5 +1,6 @@
 package com.campuslands.tickets.config;
 
+import com.campuslands.tickets.ai.AnalizadorConCache;
 import com.campuslands.tickets.ai.AnalizadorConRespaldo;
 import com.campuslands.tickets.ai.AnalizadorLlmService;
 import com.campuslands.tickets.ai.AnalizadorReglasService;
@@ -10,6 +11,7 @@ import java.net.http.HttpClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.cache.CacheManager;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
@@ -24,7 +26,8 @@ public class IaConfig {
     private static final Logger log = LoggerFactory.getLogger(IaConfig.class);
 
     @Bean
-    public AnalizadorTicketService analizadorTicketService(IaProperties propiedades, JsonMapper jsonMapper) {
+    public AnalizadorTicketService analizadorTicketService(IaProperties propiedades, JsonMapper jsonMapper,
+                                                           CacheManager cacheManager) {
         AnalizadorReglasService reglas = new AnalizadorReglasService();
         if (!propiedades.usaModeloDeLenguaje()) {
             log.info("Analizador de tickets: reglas y palabras clave (AI_MODE={}, API key configurada: {})",
@@ -38,7 +41,9 @@ public class IaConfig {
                 jsonMapper, new PromptAnalisisTicket(), new ValidadorAnalisisIa());
         log.info("Analizador de tickets: modelo '{}' en {} (respaldo con reglas: {})", propiedades.modelo(),
                 propiedades.baseUrl(), propiedades.respaldoConReglas() ? "sí" : "no");
-        return propiedades.respaldoConReglas() ? new AnalizadorConRespaldo(modelo, reglas) : modelo;
+        AnalizadorTicketService analizador =
+                propiedades.respaldoConReglas() ? new AnalizadorConRespaldo(modelo, reglas) : modelo;
+        return new AnalizadorConCache(analizador, cacheManager.getCache(CacheConfig.ANALISIS_IA));
     }
 
     private static RestClient crearClienteHttp(IaProperties propiedades) {

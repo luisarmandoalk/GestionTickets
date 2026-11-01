@@ -3,7 +3,6 @@ package com.campuslands.tickets.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -13,6 +12,7 @@ import com.campuslands.tickets.ai.AnalisisTicketResponse;
 import com.campuslands.tickets.ai.AnalizadorTicketService;
 import com.campuslands.tickets.dto.CrearTicketRequest;
 import com.campuslands.tickets.dto.TicketResponse;
+import com.campuslands.tickets.entity.AccionAuditoria;
 import com.campuslands.tickets.entity.Categoria;
 import com.campuslands.tickets.entity.EstadoTicket;
 import com.campuslands.tickets.entity.HistorialEstadoTicket;
@@ -21,6 +21,7 @@ import com.campuslands.tickets.entity.Prioridad;
 import com.campuslands.tickets.entity.Rol;
 import com.campuslands.tickets.entity.Ticket;
 import com.campuslands.tickets.entity.Usuario;
+import com.campuslands.tickets.exception.AccesoDenegadoException;
 import com.campuslands.tickets.exception.OperacionNoPermitidaException;
 import com.campuslands.tickets.exception.TecnicoInvalidoException;
 import com.campuslands.tickets.exception.TicketNoEncontradoException;
@@ -31,6 +32,7 @@ import com.campuslands.tickets.mapper.UsuarioMapper;
 import com.campuslands.tickets.repository.HistorialEstadoTicketRepository;
 import com.campuslands.tickets.repository.TicketRepository;
 import com.campuslands.tickets.repository.UsuarioRepository;
+import com.campuslands.tickets.security.UsuarioAutenticado;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
@@ -49,6 +51,10 @@ class TicketServiceImplTest {
     private static final String TITULO = "Problema con internet";
     private static final String DESCRIPCION =
             "Desde esta mañana no puedo conectarme a internet y tengo una reunión importante en 20 minutos.";
+    private static final UsuarioAutenticado LAURA = new UsuarioAutenticado(1L, Rol.USUARIO);
+    private static final UsuarioAutenticado CARLOS = new UsuarioAutenticado(2L, Rol.USUARIO);
+    private static final UsuarioAutenticado ANDREA = new UsuarioAutenticado(3L, Rol.ADMIN);
+    private static final UsuarioAutenticado SOFIA = new UsuarioAutenticado(5L, Rol.SOPORTE);
 
     @Mock
     private TicketRepository ticketRepository;
@@ -56,6 +62,8 @@ class TicketServiceImplTest {
     private UsuarioRepository usuarioRepository;
     @Mock
     private HistorialEstadoTicketRepository historialRepository;
+    @Mock
+    private AuditoriaTicketService auditoria;
     @Mock
     private AnalizadorTicketService analizador;
     @Mock
@@ -65,12 +73,12 @@ class TicketServiceImplTest {
 
     @BeforeEach
     void configurar() {
-        servicio = new TicketServiceImpl(ticketRepository, usuarioRepository, historialRepository, analizador,
-                new TicketMapper(new UsuarioMapper()), transacciones);
+        servicio = new TicketServiceImpl(ticketRepository, usuarioRepository, historialRepository, auditoria,
+                analizador, new TicketMapper(new UsuarioMapper()), transacciones);
     }
 
     @Test
-    void crearTicket_guardaElTicketConElAnalisisDeLaIa() {
+    void crearTicket_guardaElTicketConElAnalisisDeLaIaYLoAudita() {
         Usuario solicitante = usuario(1L, "Laura Gómez", Rol.USUARIO);
         when(usuarioRepository.existsById(1L)).thenReturn(true);
         when(usuarioRepository.getReferenceById(1L)).thenReturn(solicitante);
@@ -84,7 +92,7 @@ class TicketServiceImplTest {
             return ticket;
         });
 
-        TicketResponse respuesta = servicio.crear(new CrearTicketRequest(TITULO, DESCRIPCION, 1L));
+        TicketResponse respuesta = servicio.crear(new CrearTicketRequest(TITULO, DESCRIPCION, 1L), LAURA);
 
         assertThat(respuesta.id()).isEqualTo(25L);
         assertThat(respuesta.estado()).isEqualTo(EstadoTicket.ABIERTO);
@@ -99,13 +107,23 @@ class TicketServiceImplTest {
         verify(historialRepository).save(historial.capture());
         assertThat(historial.getValue().getEstadoAnterior()).isNull();
         assertThat(historial.getValue().getEstadoNuevo()).isEqualTo(EstadoTicket.ABIERTO);
+        verify(auditoria).registrar(25L, AccionAuditoria.CREACION,
+                "Ticket creado y clasificado como CONECTIVIDAD / ALTA (MODELO_LENGUAJE)", LAURA);
+    }
+
+    @Test
+    void crearTicket_aNombreDeOtroUsuarioConRolUsuario_lanzaAccesoDenegadoSinConsultarLaIa() {
+        assertThatThrownBy(() -> servicio.crear(new CrearTicketRequest(TITULO, DESCRIPCION, 1L), CARLOS))
+                .isInstanceOf(AccesoDenegadoException.class)
+                .hasMessageContaining("solo puede registrar tickets a su nombre");
+        verifyNoInteractions(analizador, ticketRepository, usuarioRepository, auditoria);
     }
 
     @Test
     void crearTicket_conUsuarioInexistente_noConsultaLaIaNiGuarda() {
         when(usuarioRepository.existsById(99L)).thenReturn(false);
 
-        assertThatThrownBy(() -> servicio.crear(new CrearTicketRequest(TITULO, DESCRIPCION, 99L)))
+        assertThatThrownBy(() -> servicio.crear(new CrearTicketRequest(TITULO, DESCRIPCION, 99L), ANDREA))
                 .isInstanceOf(UsuarioNoEncontradoException.class)
                 .hasMessage("No se encontró el usuario con id 99");
         verifyNoInteractions(analizador, ticketRepository);
@@ -115,9 +133,25 @@ class TicketServiceImplTest {
     void obtener_ticketInexistente_lanzaTicketNoEncontrado() {
         when(ticketRepository.findById(15L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> servicio.obtener(15L))
+        assertThatThrownBy(() -> servicio.obtener(15L, ANDREA))
                 .isInstanceOf(TicketNoEncontradoException.class)
                 .hasMessage("No se encontró el ticket con id 15");
+    }
+
+    @Test
+    void obtener_ticketPropioConRolUsuario_loDevuelve() {
+        when(ticketRepository.findById(25L)).thenReturn(Optional.of(ticket(25L, EstadoTicket.ABIERTO)));
+
+        assertThat(servicio.obtener(25L, LAURA).id()).isEqualTo(25L);
+    }
+
+    @Test
+    void obtener_ticketDeOtroUsuarioConRolUsuario_lanzaAccesoDenegado() {
+        when(ticketRepository.findById(25L)).thenReturn(Optional.of(ticket(25L, EstadoTicket.ABIERTO)));
+
+        assertThatThrownBy(() -> servicio.obtener(25L, CARLOS))
+                .isInstanceOf(AccesoDenegadoException.class)
+                .hasMessage("Solo puede consultar los tickets que usted registró");
     }
 
     @Test
@@ -125,10 +159,11 @@ class TicketServiceImplTest {
         when(ticketRepository.findById(25L)).thenReturn(Optional.of(ticket(25L, EstadoTicket.ABIERTO)));
         when(usuarioRepository.findById(3L)).thenReturn(Optional.of(usuario(3L, "Andrea Ruiz", Rol.ADMIN)));
 
-        assertThatThrownBy(() -> servicio.asignarTecnico(25L, 3L))
+        assertThatThrownBy(() -> servicio.asignarTecnico(25L, 3L, ANDREA))
                 .isInstanceOf(TecnicoInvalidoException.class)
                 .hasMessageContaining("rol ADMIN");
         verify(ticketRepository, never()).saveAndFlush(any());
+        verifyNoInteractions(auditoria);
     }
 
     @Test
@@ -136,7 +171,7 @@ class TicketServiceImplTest {
         when(ticketRepository.findById(25L)).thenReturn(Optional.of(ticket(25L, EstadoTicket.ABIERTO)));
         when(usuarioRepository.findById(77L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> servicio.asignarTecnico(25L, 77L))
+        assertThatThrownBy(() -> servicio.asignarTecnico(25L, 77L, ANDREA))
                 .isInstanceOf(UsuarioNoEncontradoException.class)
                 .hasMessage("No se encontró el técnico con id 77");
     }
@@ -146,58 +181,74 @@ class TicketServiceImplTest {
         when(ticketRepository.findById(25L)).thenReturn(Optional.of(ticket(25L, EstadoTicket.CERRADO)));
         when(usuarioRepository.findById(5L)).thenReturn(Optional.of(usuario(5L, "Sofía Ramírez", Rol.SOPORTE)));
 
-        assertThatThrownBy(() -> servicio.asignarTecnico(25L, 5L))
+        assertThatThrownBy(() -> servicio.asignarTecnico(25L, 5L, ANDREA))
                 .isInstanceOf(OperacionNoPermitidaException.class);
     }
 
     @Test
-    void asignarTecnico_conRolSoporte_asignaYGuarda() {
+    void asignarTecnico_conRolSoporte_asignaGuardaYAudita() {
         Ticket ticket = ticket(25L, EstadoTicket.ABIERTO);
         when(ticketRepository.findById(25L)).thenReturn(Optional.of(ticket));
         when(usuarioRepository.findById(5L)).thenReturn(Optional.of(usuario(5L, "Sofía Ramírez", Rol.SOPORTE)));
 
-        TicketResponse respuesta = servicio.asignarTecnico(25L, 5L);
+        TicketResponse respuesta = servicio.asignarTecnico(25L, 5L, ANDREA);
 
         assertThat(respuesta.tecnicoAsignado().id()).isEqualTo(5L);
         assertThat(respuesta.tecnicoAsignado().nombre()).isEqualTo("Sofía Ramírez");
         verify(ticketRepository).saveAndFlush(ticket);
+        verify(auditoria).registrar(25L, AccionAuditoria.ASIGNACION, "Técnico asignado: Sofía Ramírez (id 5)", ANDREA);
     }
 
     @Test
-    void actualizarEstado_transicionPermitida_cambiaElEstadoYRegistraElHistorial() {
+    void asignarTecnico_reasignacion_auditaElTecnicoAnteriorYElNuevo() {
+        Ticket ticket = ticket(25L, EstadoTicket.EN_PROCESO);
+        ticket.asignarTecnico(usuario(4L, "Miguel Torres", Rol.SOPORTE));
+        when(ticketRepository.findById(25L)).thenReturn(Optional.of(ticket));
+        when(usuarioRepository.findById(5L)).thenReturn(Optional.of(usuario(5L, "Sofía Ramírez", Rol.SOPORTE)));
+
+        servicio.asignarTecnico(25L, 5L, SOFIA);
+
+        verify(auditoria).registrar(25L, AccionAuditoria.ASIGNACION,
+                "Técnico: Miguel Torres (id 4) → Sofía Ramírez (id 5)", SOFIA);
+    }
+
+    @Test
+    void actualizarEstado_transicionPermitida_cambiaElEstadoRegistraElHistorialYAudita() {
         Ticket ticket = ticket(25L, EstadoTicket.ABIERTO);
         when(ticketRepository.findById(25L)).thenReturn(Optional.of(ticket));
 
-        TicketResponse respuesta = servicio.actualizarEstado(25L, EstadoTicket.EN_PROCESO);
+        TicketResponse respuesta = servicio.actualizarEstado(25L, EstadoTicket.EN_PROCESO, SOFIA);
 
         assertThat(respuesta.estado()).isEqualTo(EstadoTicket.EN_PROCESO);
         ArgumentCaptor<HistorialEstadoTicket> historial = ArgumentCaptor.forClass(HistorialEstadoTicket.class);
         verify(historialRepository).save(historial.capture());
         assertThat(historial.getValue().getEstadoAnterior()).isEqualTo(EstadoTicket.ABIERTO);
         assertThat(historial.getValue().getEstadoNuevo()).isEqualTo(EstadoTicket.EN_PROCESO);
+        verify(auditoria).registrar(25L, AccionAuditoria.CAMBIO_ESTADO, "Estado: ABIERTO → EN_PROCESO", SOFIA);
     }
 
     @Test
     void actualizarEstado_transicionNoPermitida_lanzaExcepcionSinGuardar() {
         when(ticketRepository.findById(25L)).thenReturn(Optional.of(ticket(25L, EstadoTicket.CERRADO)));
 
-        assertThatThrownBy(() -> servicio.actualizarEstado(25L, EstadoTicket.ABIERTO))
+        assertThatThrownBy(() -> servicio.actualizarEstado(25L, EstadoTicket.ABIERTO, SOFIA))
                 .isInstanceOf(TransicionEstadoInvalidaException.class)
                 .hasMessageContaining("CERRADO");
         verify(ticketRepository, never()).saveAndFlush(any());
-        verifyNoInteractions(historialRepository);
+        verifyNoInteractions(historialRepository, auditoria);
     }
 
     @Test
-    void eliminar_marcaElTicketComoEliminado() {
+    void eliminar_marcaElTicketComoEliminadoYLoAudita() {
         Ticket ticket = ticket(25L, EstadoTicket.ABIERTO);
         when(ticketRepository.findById(25L)).thenReturn(Optional.of(ticket));
 
-        servicio.eliminar(25L);
+        servicio.eliminar(25L, ANDREA);
 
         assertThat(ticket.isEliminado()).isTrue();
         assertThat(ticket.getFechaEliminacion()).isNotNull();
         verify(ticketRepository).save(ticket);
+        verify(auditoria).registrar(25L, AccionAuditoria.ELIMINACION, "Ticket eliminado (eliminación lógica)", ANDREA);
     }
 
     private void ejecutarTransaccionesDirectamente() {

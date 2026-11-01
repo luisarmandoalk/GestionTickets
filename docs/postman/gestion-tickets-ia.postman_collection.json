@@ -1,14 +1,93 @@
 {
   "info": {
     "name": "Gestión de Tickets con IA",
-    "description": "Solicitudes de ejemplo de la API. Ejecute primero 'Crear ticket': guarda el id creado en la variable ticketId.",
+    "description": "Solicitudes de ejemplo de la API. Ejecute primero 'Iniciar sesión como ADMIN': guarda el token en la variable token, que usan todas las solicitudes. Luego 'Crear ticket' guarda el id creado en la variable ticketId. 'Iniciar sesión como USUARIO' guarda tokenUsuario, que se usa en los casos 403.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{token}}", "type": "string" }]
   },
   "variable": [
     { "key": "baseUrl", "value": "http://localhost:8080" },
+    { "key": "token", "value": "" },
+    { "key": "tokenUsuario", "value": "" },
     { "key": "ticketId", "value": "1" }
   ],
   "item": [
+    {
+      "name": "Autenticación",
+      "item": [
+        {
+          "name": "Iniciar sesión como ADMIN (Andrea)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "if (pm.response.code === 200) { pm.collectionVariables.set('token', pm.response.json().token); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"correo\": \"andrea.ruiz@empresa.com\",\n  \"password\": \"Demo1234*\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/auth/login", "host": ["{{baseUrl}}"], "path": ["api", "auth", "login"] }
+          }
+        },
+        {
+          "name": "Iniciar sesión como SOPORTE (Sofía)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "if (pm.response.code === 200) { pm.collectionVariables.set('token', pm.response.json().token); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "description": "Reemplaza el token de la colección: las solicitudes siguientes se hacen como SOPORTE.",
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"correo\": \"sofia.ramirez@empresa.com\",\n  \"password\": \"Demo1234*\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/auth/login", "host": ["{{baseUrl}}"], "path": ["api", "auth", "login"] }
+          }
+        },
+        {
+          "name": "Iniciar sesión como USUARIO (Laura)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "if (pm.response.code === 200) { pm.collectionVariables.set('tokenUsuario', pm.response.json().token); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "description": "Guarda el token en tokenUsuario, sin reemplazar el de la colección.",
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"correo\": \"laura.gomez@empresa.com\",\n  \"password\": \"Demo1234*\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/auth/login", "host": ["{{baseUrl}}"], "path": ["api", "auth", "login"] }
+          }
+        }
+      ]
+    },
     {
       "name": "Tickets",
       "item": [
@@ -98,10 +177,17 @@
           }
         },
         {
-          "name": "Eliminar ticket",
+          "name": "Eliminar ticket (rol ADMIN)",
           "request": {
             "method": "DELETE",
             "url": { "raw": "{{baseUrl}}/api/tickets/{{ticketId}}", "host": ["{{baseUrl}}"], "path": ["api", "tickets", "{{ticketId}}"] }
+          }
+        },
+        {
+          "name": "Auditoría del ticket (rol ADMIN)",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/tickets/{{ticketId}}/auditoria", "host": ["{{baseUrl}}"], "path": ["api", "tickets", "{{ticketId}}", "auditoria"] }
           }
         }
       ]
@@ -110,7 +196,7 @@
       "name": "Usuarios",
       "item": [
         {
-          "name": "Crear usuario",
+          "name": "Crear usuario (rol ADMIN)",
           "request": {
             "method": "POST",
             "header": [{ "key": "Content-Type", "value": "application/json" }],
@@ -145,6 +231,45 @@
     {
       "name": "Casos de error",
       "item": [
+        {
+          "name": "401 - Sin token",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/tickets", "host": ["{{baseUrl}}"], "path": ["api", "tickets"] }
+          }
+        },
+        {
+          "name": "401 - Contraseña incorrecta",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"correo\": \"andrea.ruiz@empresa.com\",\n  \"password\": \"incorrecta\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/auth/login", "host": ["{{baseUrl}}"], "path": ["api", "auth", "login"] }
+          }
+        },
+        {
+          "name": "403 - USUARIO intenta eliminar",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{tokenUsuario}}", "type": "string" }] },
+            "method": "DELETE",
+            "url": { "raw": "{{baseUrl}}/api/tickets/{{ticketId}}", "host": ["{{baseUrl}}"], "path": ["api", "tickets", "{{ticketId}}"] }
+          }
+        },
+        {
+          "name": "403 - USUARIO crea a nombre de otra persona",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{tokenUsuario}}", "type": "string" }] },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"titulo\": \"Ticket ajeno\",\n  \"descripcion\": \"Intento registrar un ticket a nombre de otra persona.\",\n  \"usuarioId\": 2\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/tickets", "host": ["{{baseUrl}}"], "path": ["api", "tickets"] }
+          }
+        },
         {
           "name": "404 - Ticket inexistente",
           "request": {
